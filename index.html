@@ -171,6 +171,8 @@ const ICON = {
 /* ---------- progress state ---------- */
 const LS_KEY = 'eng-a1c2-progress-v1';
 let P = {known:{}, gram:{}, best:{}};
+let storageOK = true;
+try { localStorage.setItem('eng-test','1'); storageOK = localStorage.getItem('eng-test')==='1'; localStorage.removeItem('eng-test'); } catch(e){ storageOK = false; }
 try { const s = localStorage.getItem(LS_KEY); if (s) P = Object.assign(P, JSON.parse(s)); } catch(e){}
 const knownSet = {};
 LEVELS.forEach(L => knownSet[L] = new Set((P.known && P.known[L]) || []));
@@ -192,7 +194,9 @@ async function flush(){
   saving = false; if (dirty) flush();
 }
 function setSync(t){ $('#sync').textContent = t; }
-setSync('Çevrimdışı sürüm 7c3fcffd · ilerlemen bu telefona kaydediliyor');
+setSync('Çevrimdışı sürüm 68d983cb · ilerlemen bu telefona kaydediliyor');
+const NO_STORE_MSG = '⚠️ Bu tarayıcı kayıt yapmaya izin vermiyor; sayfa yenilenince ilerleme silinir. Gizli sekme olabilir ya da Ayarlar → Safari\'de "Tüm Çerezleri Engelle" açık olabilir.';
+if (!storageOK) $('#sync').textContent = NO_STORE_MSG + ' · ' + $('#sync').textContent;
 /* ---------- backup / restore ---------- */
 function mergeProgress(r){
   LEVELS.forEach(L => ((r.known||{})[L]||[]).forEach(w => knownSet[L].add(w)));
@@ -202,38 +206,59 @@ function mergeProgress(r){
   P.best = best;
 }
 let bkMode = null;
+function bkEncode(){
+  const bytes = new TextEncoder().encode(JSON.stringify(snapshot()));
+  let bin = ''; bytes.forEach(x => bin += String.fromCharCode(x));
+  return 'ENG1:' + btoa(bin);
+}
+function bkDecode(txt){
+  txt = String(txt || '');
+  const j = txt.indexOf('{');
+  if (txt.indexOf('ENG1:') < 0 && j >= 0) return JSON.parse(txt.slice(j, txt.lastIndexOf('}') + 1));
+  const m = txt.split('ENG1:').pop().replace(/[^A-Za-z0-9+/=]/g, '');
+  const bin = atob(m), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+function countKnown(r){ return LEVELS.reduce((a,L)=>a+(((r.known||{})[L]||[]).length), 0); }
 function bkOpen(mode){
   bkMode = mode; $('#bkBox').style.display = 'block';
   const t = $('#bkTxt');
   if (mode === 'exp'){
-    t.value = 'ENG1:' + btoa(unescape(encodeURIComponent(JSON.stringify(snapshot()))));
-    $('#bkMsg').textContent = 'Bu kodu kopyalayıp Notlar\'a veya kendine mesaj olarak kaydet. Gerekirse "Yedeği geri yükle" ile geri alırsın.';
-    $('#bkGo').textContent = 'Kopyala'; t.select();
+    t.value = bkEncode(); t.readOnly = true;
+    $('#bkMsg').textContent = 'Yedekte ' + countKnown(snapshot()) + ' bilinen kelime var. "Paylaş / Kopyala" ile Notlar\'a kaydet. Olmazsa kutuya basılı tut → Tümünü Seç → Kopyala.';
+    $('#bkGo').textContent = 'Paylaş / Kopyala';
   } else {
-    t.value = ''; $('#bkMsg').textContent = 'Daha önce aldığın yedek kodunu buraya yapıştır. Mevcut ilerlemen silinmez, ikisi birleştirilir.';
-    $('#bkGo').textContent = 'Geri yükle'; t.focus();
+    t.readOnly = false; t.value = '';
+    $('#bkMsg').textContent = 'Yedek kodunu kutuya yapıştır (basılı tut → Yapıştır), sonra "Geri yükle"ye bas. Mevcut ilerlemen silinmez, ikisi birleştirilir.';
+    $('#bkGo').textContent = 'Geri yükle';
   }
+  $('#bkBox').scrollIntoView({block:'center'});
 }
 $('#bkExp').addEventListener('click', () => bkOpen('exp'));
 $('#bkImp').addEventListener('click', () => bkOpen('imp'));
 $('#bkClose').addEventListener('click', () => { $('#bkBox').style.display = 'none'; });
 $('#bkGo').addEventListener('click', async () => {
-  const t = $('#bkTxt');
+  const t = $('#bkTxt'), msg = $('#bkMsg');
   if (bkMode === 'exp'){
-    try { await navigator.clipboard.writeText(t.value); $('#bkMsg').textContent = 'Kopyalandı ✓'; }
-    catch(e){ t.select(); try{ document.execCommand('copy'); $('#bkMsg').textContent = 'Kopyalandı ✓'; }catch(_){ $('#bkMsg').textContent = 'Kodu seçip elle kopyala.'; } }
+    if (navigator.share){ try { await navigator.share({title:'İngilizce yedek', text:t.value}); msg.textContent = 'Paylaşıldı ✓ (Notlar\'a kaydettiysen tamam)'; return; } catch(e){ if (e && e.name === 'AbortError') return; } }
+    try { await navigator.clipboard.writeText(t.value); msg.textContent = 'Kopyalandı ✓'; return; } catch(e){}
+    t.readOnly = false; t.focus(); t.setSelectionRange(0, t.value.length);
+    let ok = false; try { ok = document.execCommand('copy'); } catch(e){}
+    t.readOnly = true;
+    msg.textContent = ok ? 'Kopyalandı ✓' : 'Otomatik kopyalanamadı. Kutuya basılı tut → Tümünü Seç → Kopyala.';
     return;
   }
-  try {
-    const raw = t.value.trim().replace(/^ENG1:/, '');
-    const r = JSON.parse(decodeURIComponent(escape(atob(raw))));
-    if (!r || !r.known) throw 0;
-    mergeProgress(r); save(); render();
-    const n = LEVELS.reduce((a,L)=>a+knownSet[L].size, 0);
-    $('#bkMsg').textContent = 'Geri yüklendi ✓ · bilinen kelime: ' + n;
-  } catch(e){ $('#bkMsg').textContent = 'Kod okunamadı. Tamamını kopyaladığından emin ol.'; }
+  let r;
+  try { r = bkDecode(t.value); if (!r || typeof r !== 'object' || !r.known) throw 0; }
+  catch(e){ msg.textContent = t.value.trim() ? 'Kod okunamadı. Kodun tamamını (ENG1: ile başlayan) yapıştırdığından emin ol.' : 'Önce yedek kodunu kutuya yapıştır.'; return; }
+  const before = LEVELS.reduce((a,L)=>a+knownSet[L].size, 0);
+  mergeProgress(r); save(); render();
+  let stored = false; try { stored = !!localStorage.getItem(LS_KEY) && JSON.parse(localStorage.getItem(LS_KEY)).known !== undefined; } catch(e){}
+  if (!stored && !remote){ msg.textContent = 'Yüklendi ama bu tarayıcı kaydetmiyor: sayfa yenilenince silinecek. ' + NO_STORE_MSG.replace('⚠️ ',''); return; }
+  const after = LEVELS.reduce((a,L)=>a+knownSet[L].size, 0);
+  msg.textContent = 'Geri yüklendi ✓ Yedekteki kelime: ' + countKnown(r) + ' · eklenen: ' + (after-before) + ' · toplam bilinen: ' + after;
 });
-
 /* ---------- speech ---------- */
 let ctts = null, dict = null;
 const synth = ('speechSynthesis' in window) ? window.speechSynthesis : null;
