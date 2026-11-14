@@ -141,7 +141,16 @@ mark{background:var(--pri-soft);color:var(--pri);font-weight:700;font-style:norm
   </header>
   <main id="view"></main>
   <p class="sync" id="sync"></p>
-  <div class="bk"><button class="chip" id="bkExp">İlerlemeyi yedekle</button><button class="chip" id="bkImp">Yedeği geri yükle</button></div>
+  <div class="bk"><button class="chip" id="bkExp">İlerlemeyi yedekle</button><button class="chip" id="bkImp">Yedeği geri yükle</button><button class="chip" id="vcBtn">🔊 Ses ayarları</button></div>
+  <div id="vcBox" class="card" style="display:none;margin-top:8px">
+    <div class="lab" style="margin-top:0">Seslendirme</div>
+    <label class="small muted">Ses</label>
+    <select id="vcSel" style="width:100%;margin:4px 0 10px;padding:8px;border-radius:10px;font-size:15px"></select>
+    <label class="small muted">Hız</label>
+    <select id="vcRate" style="width:100%;margin:4px 0 10px;padding:8px;border-radius:10px;font-size:15px"><option value="0.6">Çok yavaş</option><option value="0.75">Yavaş</option><option value="0.9">Normal</option><option value="1">Hızlı</option><option value="1.15">Çok hızlı</option></select>
+    <p class="small muted" style="margin:0 0 8px">Listede az ses varsa: iPhone Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → İngilizce'den yeni ses indir (ör. "Geliştirilmiş" / "Premium" sesler daha doğal). Sonra uygulamayı kapatıp aç.</p>
+    <div class="btns"><button class="btn" id="vcTest">Dinle</button><button class="btn" id="vcClose" style="opacity:.75">Kapat</button></div>
+  </div>
   <div id="bkBox" class="card" style="display:none;margin-top:8px"><p class="small muted" id="bkMsg" style="margin:0 0 6px"></p><textarea id="bkTxt" rows="4" style="width:100%;box-sizing:border-box;font-size:12px;border-radius:10px;border:1px solid var(--line,#ccc);padding:8px;background:transparent;color:inherit"></textarea><div class="btns" style="margin-top:8px"><button class="btn" id="bkGo"></button><button class="btn" id="bkClose" style="opacity:.75">Kapat</button></div></div>
 </div>
 <nav class="tabs"><div class="in" id="tabs"></div></nav>
@@ -194,7 +203,7 @@ async function flush(){
   saving = false; if (dirty) flush();
 }
 function setSync(t){ $('#sync').textContent = t; }
-setSync('Çevrimdışı sürüm 68d983cb · ilerlemen bu telefona kaydediliyor');
+setSync('Çevrimdışı sürüm 8a472f22 · ilerlemen bu telefona kaydediliyor');
 const NO_STORE_MSG = '⚠️ Bu tarayıcı kayıt yapmaya izin vermiyor; sayfa yenilenince ilerleme silinir. Gizli sekme olabilir ya da Ayarlar → Safari\'de "Tüm Çerezleri Engelle" açık olabilir.';
 if (!storageOK) $('#sync').textContent = NO_STORE_MSG + ' · ' + $('#sync').textContent;
 /* ---------- backup / restore ---------- */
@@ -263,19 +272,35 @@ $('#bkGo').addEventListener('click', async () => {
 let ctts = null, dict = null;
 const synth = ('speechSynthesis' in window) ? window.speechSynthesis : null;
 let enVoice = null;
-function pickVoice(){ if(!synth) return; const vs = synth.getVoices(); enVoice = vs.find(v=>/en[-_]US/i.test(v.lang) && /Samantha|Alex|Google|Ava|Allison/i.test(v.name)) || vs.find(v=>/^en[-_]US/i.test(v.lang)) || vs.find(v=>/^en/i.test(v.lang)) || null; }
-if (synth){ pickVoice(); synth.onvoiceschanged = pickVoice; }
+let VC = {name:'', rate:0.9};
+try { VC = Object.assign(VC, JSON.parse(localStorage.getItem('eng-voice')||'{}')); } catch(e){}
+function enVoices(){ return synth ? synth.getVoices().filter(v=>/^en/i.test(v.lang)) : []; }
+const ACC = {US:'Amerikan', GB:'İngiliz', AU:'Avustralya', IE:'İrlanda', ZA:'G. Afrika', IN:'Hint', CA:'Kanada', NZ:'Y. Zelanda'};
+function fillVoices(){
+  const sel = $('#vcSel'); if (!sel) return;
+  const vs = enVoices().slice().sort((a,b)=>a.lang.localeCompare(b.lang)||a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">Otomatik (Amerikan)</option>' + vs.map(v=>{ const c=(v.lang.split(/[-_]/)[1]||'').toUpperCase(); return `<option value="${esc(v.name)}"${v.name===VC.name?' selected':''}>${esc(v.name)} — ${ACC[c]||v.lang}</option>`; }).join('');
+  $('#vcRate').value = String(VC.rate);
+}
+function pickVoice(){ if(!synth) return; const vs = synth.getVoices(); if (VC.name){ const m = vs.find(v=>v.name===VC.name); if (m){ enVoice = m; fillVoices(); return; } } enVoice = vs.find(v=>/en[-_]US/i.test(v.lang) && /Samantha|Alex|Google|Ava|Allison/i.test(v.name)) || vs.find(v=>/^en[-_]US/i.test(v.lang)) || vs.find(v=>/^en/i.test(v.lang)) || null; }
+if (synth){ pickVoice(); synth.onvoiceschanged = () => { pickVoice(); fillVoices(); }; }
 function canSpeak(){ return !!(ctts || synth); }
 function speak(text){
-  if (ctts){ ctts.speak(text, {language:'en', rate:0.9}).catch(()=>webSpeak(text)); return; }
+  if (ctts && !VC.name){ ctts.speak(text, {language:'en', rate:VC.rate}).catch(()=>webSpeak(text)); return; }
   webSpeak(text);
 }
 function webSpeak(text){
   if (!synth) return;
-  try { synth.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang='en-US'; u.rate=0.9; if (enVoice) u.voice=enVoice; synth.speak(u); } catch(e){}
+  try { synth.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang=enVoice?enVoice.lang:'en-US'; u.rate=VC.rate; if (enVoice) u.voice=enVoice; synth.speak(u); } catch(e){}
 }
 function refreshTTS(){ document.body.classList.toggle('no-tts', !canSpeak()); }
 refreshTTS();
+function saveVC(){ try{ localStorage.setItem('eng-voice', JSON.stringify(VC)); }catch(e){} }
+$('#vcBtn').addEventListener('click', () => { fillVoices(); const b=$('#vcBox'); b.style.display = b.style.display==='none'?'block':'none'; if (b.style.display==='block') b.scrollIntoView({block:'center'}); });
+$('#vcClose').addEventListener('click', () => { $('#vcBox').style.display='none'; });
+$('#vcSel').addEventListener('change', e => { VC.name = e.target.value; saveVC(); enVoice=null; pickVoice(); webSpeak('Hello! This is my voice.'); });
+$('#vcRate').addEventListener('change', e => { VC.rate = parseFloat(e.target.value)||0.9; saveVC(); speak('This is the new speed.'); });
+$('#vcTest').addEventListener('click', () => speak('Learning English is fun. Practice a little every day.'));
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-say]'); if (!b) return;
   e.stopPropagation(); speak(b.getAttribute('data-say'));
